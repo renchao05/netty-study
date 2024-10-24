@@ -285,20 +285,26 @@ public abstract class AbstractBootstrap<B extends AbstractBootstrap<B, C>, C ext
     }
 
     private ChannelFuture doBind(final SocketAddress localAddress) {
+        // 初始化并注册一个Channel，ChannelFuture（异步注册）
         final ChannelFuture regFuture = initAndRegister();
         final Channel channel = regFuture.channel();
         if (regFuture.cause() != null) {
+            // 初始化和注册Channel时出现了错误，直接返回regFuture
             return regFuture;
         }
 
         if (regFuture.isDone()) {
             // At this point we know that the registration was complete and successful.
             ChannelPromise promise = channel.newPromise();
+            // 注册如果已经完成，立即执行绑定操作，并返回ChannelFuture
             doBind0(regFuture, channel, localAddress, promise);
             return promise;
         } else {
             // Registration future is almost always fulfilled already, but just in case it's not.
+
+            // 未完成的情况下，创建一个特殊的Promise，可以在注册成功后继续后续的绑定操作
             final PendingRegistrationPromise promise = new PendingRegistrationPromise(channel);
+            // 添加一个异步监听器，会在Channel注册完成时被触发
             regFuture.addListener(new ChannelFutureListener() {
                 @Override
                 public void operationComplete(ChannelFuture future) throws Exception {
@@ -310,8 +316,9 @@ public abstract class AbstractBootstrap<B extends AbstractBootstrap<B, C>, C ext
                     } else {
                         // Registration was successful, so set the correct executor to use.
                         // See https://github.com/netty/netty/issues/2586
-                        promise.registered();
+                        promise.registered(); // 表示注册完成
 
+                        // 绑定操作
                         doBind0(regFuture, channel, localAddress, promise);
                     }
                 }
@@ -323,7 +330,9 @@ public abstract class AbstractBootstrap<B extends AbstractBootstrap<B, C>, C ext
     final ChannelFuture initAndRegister() {
         Channel channel = null;
         try {
+            // 通过反射创建一个Channel实例
             channel = channelFactory.newChannel();
+            // 初始化Channel，配置必要的参数和组件
             init(channel);
         } catch (Throwable t) {
             if (channel != null) {
@@ -336,11 +345,15 @@ public abstract class AbstractBootstrap<B extends AbstractBootstrap<B, C>, C ext
             return new DefaultChannelPromise(new FailedChannel(), GlobalEventExecutor.INSTANCE).setFailure(t);
         }
 
+        // 通过EventLoopGroup将Channel注册到EventLoop上，返回一个ChannelFuture(异步)
         ChannelFuture regFuture = config().group().register(channel);
         if (regFuture.cause() != null) {
+            // 如果注册过程中出现异常
             if (channel.isRegistered()) {
+                // 如果部分注册，调用channel.close()进行关闭
                 channel.close();
             } else {
+                // 如果尚未注册，强制关闭
                 channel.unsafe().closeForcibly();
             }
         }

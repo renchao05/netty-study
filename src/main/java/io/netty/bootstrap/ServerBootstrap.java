@@ -130,15 +130,23 @@ public class ServerBootstrap extends AbstractBootstrap<ServerBootstrap, ServerCh
 
     @Override
     void init(Channel channel) {
+        // 给Channel设置一些配置选项，如SO_KEEPALIVE、TCP_NODELAY 等。
+        // 这些选项会影响Channel的行为（如是否启用TCP保持连接等）
         setChannelOptions(channel, newOptionsArray(), logger);
+        // 给Channel设置一些属性。属性和选项类似，但更多是用户自定义的键值对，可以存储额外的信息
         setAttributes(channel, newAttributesArray());
 
+        // 每个Channel都有一个ChannelPipeline，是处理器链（ChannelHandler）的容器，负责I/O事件的流转
         ChannelPipeline p = channel.pipeline();
 
+        // 子EventLoopGroup（处理新连接的Channel）
         final EventLoopGroup currentChildGroup = childGroup;
+        // 子ChannelHandler，处理子Channel的I/O事件
         final ChannelHandler currentChildHandler = childHandler;
+        // 子Channel的配置选项和属性
         final Entry<ChannelOption<?>, Object>[] currentChildOptions = newOptionsArray(childOptions);
         final Entry<AttributeKey<?>, Object>[] currentChildAttrs = newAttributesArray(childAttrs);
+        // 允许用户在初始化过程中自定义扩展
         final Collection<ChannelInitializerExtension> extensions = getInitializerExtensions();
 
         p.addLast(new ChannelInitializer<Channel>() {
@@ -146,10 +154,13 @@ public class ServerBootstrap extends AbstractBootstrap<ServerBootstrap, ServerCh
             public void initChannel(final Channel ch) {
                 final ChannelPipeline pipeline = ch.pipeline();
                 ChannelHandler handler = config.handler();
+                // 如果有配置handler，先添加配置了的处理器
                 if (handler != null) {
                     pipeline.addLast(handler);
                 }
 
+                // 添加ServerBootstrapAcceptor处理器，处理新连接的核心类，将新连接的Channel分配给子EventLoopGroup
+                // 任务提交到当前Channel的EventLoop任务队列中，保证该任务在EventLoop的线程中被执行（延迟执行）
                 ch.eventLoop().execute(new Runnable() {
                     @Override
                     public void run() {
@@ -160,6 +171,7 @@ public class ServerBootstrap extends AbstractBootstrap<ServerBootstrap, ServerCh
                 });
             }
         });
+        // 调用每个扩展的postInitializeServerListenerChannel方法进行自定义操作
         if (!extensions.isEmpty() && channel instanceof ServerChannel) {
             ServerChannel serverChannel = (ServerChannel) channel;
             for (ChannelInitializerExtension extension : extensions) {
