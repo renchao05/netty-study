@@ -568,11 +568,13 @@ abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, R
     @Override
     public ChannelFuture bind(final SocketAddress localAddress, final ChannelPromise promise) {
         ObjectUtil.checkNotNull(localAddress, "localAddress");
+        // 检测Promise是否已经被取消或者无效
         if (isNotValidPromise(promise, false)) {
             // cancelled
             return promise;
         }
 
+        // 构建掩码MASK_BIND来匹配支持bind操作的ChannelHandler
         final AbstractChannelHandlerContext next = findContextOutbound(MASK_BIND);
         EventExecutor executor = next.executor();
         if (executor.inEventLoop()) {
@@ -589,6 +591,7 @@ abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, R
     }
 
     private void invokeBind(SocketAddress localAddress, ChannelPromise promise) {
+        // 检查是否需要执行bind操作
         if (invokeHandler()) {
             try {
                 // DON'T CHANGE
@@ -596,6 +599,7 @@ abstract class AbstractChannelHandlerContext implements ChannelHandlerContext, R
                 // see https://bugs.openjdk.org/browse/JDK-8180450
                 final ChannelHandler handler = handler();
                 final DefaultChannelPipeline.HeadContext headContext = pipeline.head;
+                // 根据ChannelHandler的具体类型，调用相应的 bind 方法
                 if (handler == headContext) {
                     headContext.bind(this, localAddress, promise);
                 } else if (handler instanceof ChannelDuplexHandler) {

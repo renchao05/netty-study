@@ -479,6 +479,7 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
                 register0(promise);
             } else {
                 try {
+                    // 切换到eventLoop线程调用register0进行注册
                     eventLoop.execute(new Runnable() {
                         @Override
                         public void run() {
@@ -500,30 +501,40 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
             try {
                 // check if the channel is still open as it could be closed in the mean time when the register
                 // call was outside of the eventLoop
+                // 确保Channel处于打开状态并且Promise没有被取消
                 if (!promise.setUncancellable() || !ensureOpen(promise)) {
                     return;
                 }
+                // 记录是否是第一次注册，后续使用
                 boolean firstRegistration = neverRegistered;
+                // 将Channel注册到Selector
                 doRegister();
-                neverRegistered = false;
-                registered = true;
+                neverRegistered = false; // 标记不是第一次注册了
+                registered = true; // 标记当前Channel已经成功注册
 
                 // Ensure we call handlerAdded(...) before we actually notify the promise. This is needed as the
                 // user may already fire events through the pipeline in the ChannelFutureListener.
+                // 注册完成之前，确保所有的ChannelHandler正确添加到ChannelPipeline中
+                // 这里会调用initChannel方法
                 pipeline.invokeHandlerAddedIfNeeded();
 
+                // 注册成功，并将Promise设置为成功状态，会触发异步监听器
                 safeSetSuccess(promise);
+                // 触发ChannelRegistered事件，通知所有注册到pipeline中的ChannelHandler，当前的Channel已经成功注册
                 pipeline.fireChannelRegistered();
                 // Only fire a channelActive if the channel has never been registered. This prevents firing
                 // multiple channel actives if the channel is deregistered and re-registered.
+                // 检查当前的Channel是否处于活跃状态(是否可以进行I/O操作)
                 if (isActive()) {
                     if (firstRegistration) {
+                        // 如果第一次注册，触发ChannelActive事件，通知pipeline的所有ChannelHandler
                         pipeline.fireChannelActive();
                     } else if (config().isAutoRead()) {
                         // This channel was registered before and autoRead() is set. This means we need to begin read
                         // again so that we process inbound data.
                         //
                         // See https://github.com/netty/netty/issues/4805
+                        // 不是第一次注册，但autoRead()功能开启了，会调用beginRead()再次开始处理读事件
                         beginRead();
                     }
                 }
@@ -537,19 +548,24 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
 
         @Override
         public final void bind(final SocketAddress localAddress, final ChannelPromise promise) {
-            assertEventLoop();
+            assertEventLoop(); // 断言bind操作是在Channel所属的EventLoop线程中执行
 
+            // ChannelPromise不能设置为不可取消的状态 或者 Channel已关闭 都直接返回
             if (!promise.setUncancellable() || !ensureOpen(promise)) {
                 return;
             }
 
             // See: https://github.com/netty/netty/issues/576
+            // 对Unix系统上广播地址绑定的检查
             if (Boolean.TRUE.equals(config().getOption(ChannelOption.SO_BROADCAST)) &&
                 localAddress instanceof InetSocketAddress &&
                 !((InetSocketAddress) localAddress).getAddress().isAnyLocalAddress() &&
                 !PlatformDependent.isWindows() && !PlatformDependent.maybeSuperUser()) {
                 // Warn a user about the fact that a non-root user can't receive a
                 // broadcast packet on *nix if the socket is bound on non-wildcard address.
+                // 如果ChannelOption.SO_BROADCAST被启用并且localAddress是一个InetSocketAddress，且这个地址不是通配地址（wildcard address，例如 0.0.0.0），并且操作系统不是 Windows 且当前用户不是超级用户，那么会输出一个警告
+                // 因为在某些Unix系统上，非root用户不能接收广播数据包，除非socket绑定到一个通配地址
+                // 即便如此，Netty仍然会继续执行绑定操作，但会提示用户可能无法接收到广播包
                 logger.warn(
                         "A non-root user can't receive a broadcast packet if the socket " +
                         "is not bound to a wildcard address; binding to a non-wildcard " +
@@ -558,6 +574,7 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
 
             boolean wasActive = isActive();
             try {
+                // 实际执行绑定操作。具体的绑定逻辑会因不同的传输类型（例如NIO或Epoll）而有所不同，子类会提供具体实现
                 doBind(localAddress);
             } catch (Throwable t) {
                 safeSetFailure(promise, t);
@@ -565,7 +582,9 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
                 return;
             }
 
+            // 激活状态变化处理，如果Channel之前没有处于激活状态，但绑定后进入激活状态，则需要触发ChannelActive事件
             if (!wasActive && isActive()) {
+                // 延迟执行，将这个事件推送到事件循环中，通知ChannelPipeline的其他处理器
                 invokeLater(new Runnable() {
                     @Override
                     public void run() {
@@ -574,6 +593,7 @@ public abstract class AbstractChannel extends DefaultAttributeMap implements Cha
                 });
             }
 
+            // 将promise设置为成功状态，表示绑定操作已经成功完成
             safeSetSuccess(promise);
         }
 
