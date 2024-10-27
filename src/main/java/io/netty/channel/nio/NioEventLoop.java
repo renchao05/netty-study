@@ -502,32 +502,40 @@ public final class NioEventLoop extends SingleThreadEventLoop {
 
     @Override
     protected void run() {
+        // 跟踪选择器被异常唤醒的次数，解决select出现空转问题
         int selectCnt = 0;
+        // 无限循环，直到NioEventLoop被关闭
         for (;;) {
             try {
                 int strategy;
                 try {
+                    // 选择策略计算，决定是立即执行select操作还是继续处理任务
                     strategy = selectStrategy.calculateStrategy(selectNowSupplier, hasTasks());
                     switch (strategy) {
-                    case SelectStrategy.CONTINUE:
+                    case SelectStrategy.CONTINUE: // 跳过select操作直接继续下次循环，适用于需要立即执行的任务
                         continue;
 
-                    case SelectStrategy.BUSY_WAIT:
+                    case SelectStrategy.BUSY_WAIT: // 让线程持续忙等待，但由于NIO不支持，所以会进入SELECT
                         // fall-through to SELECT since the busy-wait is not supported with NIO
 
-                    case SelectStrategy.SELECT:
+                    case SelectStrategy.SELECT: // SELECT操作，会在没有任务或I/O事件时让线程等待
+                        // 返回定时任务队列中最早到期任务的时间戳，如果没有任何定时任务，则返回-1L
                         long curDeadlineNanos = nextScheduledTaskDeadlineNanos();
                         if (curDeadlineNanos == -1L) {
+                            // 设置为Long.MAX_VALUE
                             curDeadlineNanos = NONE; // nothing on the calendar
                         }
+                        // 记录了下一次需要唤醒selector的时间
                         nextWakeupNanos.set(curDeadlineNanos);
                         try {
                             if (!hasTasks()) {
+                                // 队列中没有任务时才进行select操作
                                 strategy = select(curDeadlineNanos);
                             }
                         } finally {
                             // This update is just to help block unnecessary selector wakeups
                             // so use of lazySet is ok (no race condition)
+                            // 将下一次需要唤醒selector的时间重置为AWAKE(-1L)，确保不会无意义地唤醒选择器
                             nextWakeupNanos.lazySet(AWAKE);
                         }
                         // fall through
@@ -543,10 +551,11 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                 }
 
                 selectCnt++;
-                cancelledKeys = 0;
-                needsToSelectAgain = false;
+                cancelledKeys = 0; // 统计取消的键数量
+                needsToSelectAgain = false; // 是否需要再次调用select()
+                // IO操作与任务执行的比例（例如，100%表示全部用于IO，0%表示全部用于任务）
                 final int ioRatio = this.ioRatio;
-                boolean ranTasks;
+                boolean ranTasks; // 是否执行了任务
                 if (ioRatio == 100) {
                     try {
                         if (strategy > 0) {
@@ -554,45 +563,59 @@ public final class NioEventLoop extends SingleThreadEventLoop {
                         }
                     } finally {
                         // Ensure we always run tasks.
+                        // 确保队列中的任务始终都能够被执行
                         ranTasks = runAllTasks();
                     }
                 } else if (strategy > 0) {
+                    // IO比例不是100，且有IO事件需要处理
                     final long ioStartTime = System.nanoTime();
                     try {
                         processSelectedKeys();
                     } finally {
                         // Ensure we always run tasks.
+                        // 根据IO操作消耗的时间，计算处理任务队列的时间，并根据计算的时间处理任务
                         final long ioTime = System.nanoTime() - ioStartTime;
                         ranTasks = runAllTasks(ioTime * (100 - ioRatio) / ioRatio);
                     }
                 } else {
+                    // 如果没有IO事件需要处理，为了避免在没有IO事件时完全停滞，只执行最少数量的任务
                     ranTasks = runAllTasks(0); // This will run the minimum number of tasks
                 }
 
+                // 如果在这次循环中 执行了任务 或 存在IO事件被处理，说明是正常唤醒，则重置selectCnt
                 if (ranTasks || strategy > 0) {
+                    // 如果在本次循环前有异常唤醒的情况下，且超过超过阈值（3），则记录日志
                     if (selectCnt > MIN_PREMATURE_SELECTOR_RETURNS && logger.isDebugEnabled()) {
                         logger.debug("Selector.select() returned prematurely {} times in a row for Selector {}.",
                                 selectCnt - 1, selector);
                     }
                     selectCnt = 0;
+                    // unexpectedSelectorWakeup()会检查异常唤醒，超过阈值会重建selector
                 } else if (unexpectedSelectorWakeup(selectCnt)) { // Unexpected wakeup (unusual case)
+                    // 如果线程是中断唤醒，或者重建selector后，将selectCnt置为0
                     selectCnt = 0;
                 }
             } catch (CancelledKeyException e) {
                 // Harmless exception - log anyway
+                // 某个SelectionKey被取消了，不会造成程序崩溃，只记录Debug日志（一般是某些JDK特定实现中的Bug）
                 if (logger.isDebugEnabled()) {
                     logger.debug(CancelledKeyException.class.getSimpleName() + " raised by a Selector {} - JDK bug?",
                             selector, e);
                 }
             } catch (Error e) {
+                // 严重的JVM错误，因为JVM可能已经无法正常运行，不会继续尝试处理剩余的IO事件或任务
                 throw e;
             } catch (Throwable t) {
+                // 记录日志，休眠1秒，继续
                 handleLoopException(t);
             } finally {
                 // Always handle shutdown even if the loop processing threw an exception.
                 try {
+                    // 判断当前EventLoop是否进入关闭阶段
                     if (isShuttingDown()) {
+                        // 关闭所有活跃的Channel连接，释放资源
                         closeAll();
+                        // 所有任务已完成则退出run循环
                         if (confirmShutdown()) {
                             return;
                         }
