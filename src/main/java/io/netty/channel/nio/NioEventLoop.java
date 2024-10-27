@@ -670,8 +670,10 @@ public final class NioEventLoop extends SingleThreadEventLoop {
 
     private void processSelectedKeys() {
         if (selectedKeys != null) {
+            // 走对selectedKeys经过优化的逻辑
             processSelectedKeysOptimized();
         } else {
+            // 直接处理JDK提供的selectedKeys
             processSelectedKeysPlain(selector.selectedKeys());
         }
     }
@@ -743,14 +745,18 @@ public final class NioEventLoop extends SingleThreadEventLoop {
 
             final Object a = k.attachment();
 
+            // 两个分支，可以通过相同的SelectionKey机制处理不同类型的任务或通道
             if (a instanceof AbstractNioChannel) {
+                // 处理该通道上的IO操作
                 processSelectedKey(k, (AbstractNioChannel) a);
             } else {
+                // 需要对通道进行操作的任务
                 @SuppressWarnings("unchecked")
                 NioTask<SelectableChannel> task = (NioTask<SelectableChannel>) a;
                 processSelectedKey(k, task);
             }
 
+            // 是否需要再次调用Selector进行重新选择
             if (needsToSelectAgain) {
                 // null out entries in the array to allow to have it GC'ed once the Channel close
                 // See https://github.com/netty/netty/issues/2363
@@ -764,6 +770,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
 
     private void processSelectedKey(SelectionKey k, AbstractNioChannel ch) {
         final AbstractNioChannel.NioUnsafe unsafe = ch.unsafe();
+        // 检查该键是否仍然有效, 无效键可能因为通道被关闭或取消注册而出现
         if (!k.isValid()) {
             final EventLoop eventLoop;
             try {
@@ -778,6 +785,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
             // and thus the SelectionKey could be cancelled as part of the deregistration process, but the channel is
             // still healthy and should not be closed.
             // See https://github.com/netty/netty/issues/5125
+            // 如果SelectionKey无效且通道仍然在当前EventLoop上注册，则关闭该通道
             if (eventLoop == this) {
                 // close the channel if the key is not valid anymore
                 unsafe.close(unsafe.voidPromise());
@@ -785,6 +793,7 @@ public final class NioEventLoop extends SingleThreadEventLoop {
             return;
         }
 
+        // 处理不同的IO操作
         try {
             int readyOps = k.readyOps();
             // We first need to call finishConnect() before try to trigger a read(...) or write(...) as otherwise
