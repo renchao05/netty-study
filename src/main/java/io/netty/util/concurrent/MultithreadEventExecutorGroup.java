@@ -73,6 +73,7 @@ public abstract class MultithreadEventExecutorGroup extends AbstractEventExecuto
         checkPositive(nThreads, "nThreads");
 
         if (executor == null) {
+            // 负责启动NioEventLoop的线程
             executor = new ThreadPerTaskExecutor(newDefaultThreadFactory());
         }
 
