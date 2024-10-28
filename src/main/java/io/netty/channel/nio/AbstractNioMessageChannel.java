@@ -65,17 +65,20 @@ public abstract class AbstractNioMessageChannel extends AbstractNioChannel {
 
         @Override
         public void read() {
+            // 断言在EventLoop线程中执行，防止多线程并发问题
             assert eventLoop().inEventLoop();
             final ChannelConfig config = config();
             final ChannelPipeline pipeline = pipeline();
+            // 分配器会在每次读取数据时动态调整缓冲区大小，提升效率
             final RecvByteBufAllocator.Handle allocHandle = unsafe().recvBufAllocHandle();
             allocHandle.reset(config);
 
-            boolean closed = false;
-            Throwable exception = null;
+            boolean closed = false; // 标记通道是否已关闭
+            Throwable exception = null; // 捕获在读取数据过程中抛出的异常
             try {
                 try {
                     do {
+                        // 读取操作，将读取到的数据加入readBuf
                         int localRead = doReadMessages(readBuf);
                         if (localRead == 0) {
                             break;
@@ -85,6 +88,7 @@ public abstract class AbstractNioMessageChannel extends AbstractNioChannel {
                             break;
                         }
 
+                        // 增加读取消息计数
                         allocHandle.incMessagesRead(localRead);
                     } while (continueReading(allocHandle));
                 } catch (Throwable t) {
@@ -92,17 +96,22 @@ public abstract class AbstractNioMessageChannel extends AbstractNioChannel {
                 }
 
                 int size = readBuf.size();
+                // 依次将readBuf中读取到的消息放入pipeline，触发ChannelRead事件
                 for (int i = 0; i < size; i ++) {
                     readPending = false;
                     pipeline.fireChannelRead(readBuf.get(i));
                 }
                 readBuf.clear();
+                // 重置分配器状态
                 allocHandle.readComplete();
+                // 一次读取操作的结束
                 pipeline.fireChannelReadComplete();
 
                 if (exception != null) {
+                    // 根据这个结果决定是否关闭Channel
                     closed = closeOnReadError(exception);
 
+                    // 传播给下游ChannelHandler
                     pipeline.fireExceptionCaught(exception);
                 }
 
@@ -120,6 +129,7 @@ public abstract class AbstractNioMessageChannel extends AbstractNioChannel {
                 //
                 // See https://github.com/netty/netty/issues/2254
                 if (!readPending && !config.isAutoRead()) {
+                    // 移除通道的读取操作
                     removeReadOp();
                 }
             }

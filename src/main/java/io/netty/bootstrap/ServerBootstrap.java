@@ -234,11 +234,14 @@ public class ServerBootstrap extends AbstractBootstrap<ServerBootstrap, ServerCh
         public void channelRead(ChannelHandlerContext ctx, Object msg) {
             final Channel child = (Channel) msg;
 
+            // 往子通道的pipeline中添加childHandler
             child.pipeline().addLast(childHandler);
 
+            // 为子通道设置选项和属性
             setChannelOptions(child, childOptions, logger);
             setAttributes(child, childAttrs);
 
+            // 自定义扩展初始化（如果配置了的话）
             if (!extensions.isEmpty()) {
                 for (ChannelInitializerExtension extension : extensions) {
                     try {
@@ -250,15 +253,18 @@ public class ServerBootstrap extends AbstractBootstrap<ServerBootstrap, ServerCh
             }
 
             try {
+                // 将child通道注册到childGroup中
                 childGroup.register(child).addListener(new ChannelFutureListener() {
                     @Override
                     public void operationComplete(ChannelFuture future) throws Exception {
                         if (!future.isSuccess()) {
+                            // 如果注册失败，强制关闭子通道，并记录失败原因
                             forceClose(child, future.cause());
                         }
                     }
                 });
             } catch (Throwable t) {
+                // 异常捕获及强制关闭子通道
                 forceClose(child, t);
             }
         }
