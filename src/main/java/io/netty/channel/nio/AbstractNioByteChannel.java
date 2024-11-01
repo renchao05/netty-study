@@ -134,21 +134,30 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
         @Override
         public final void read() {
             final ChannelConfig config = config();
+            // 判断是否应停止继续读取，在某些情况下，Netty 会检测是否已达到限流条件或是否不应继续读取
             if (shouldBreakReadReady(config)) {
+                // 清除readPending状态，终止读取
                 clearReadPending();
                 return;
             }
             final ChannelPipeline pipeline = pipeline();
+            // 缓冲区分配器，用于分配ByteBuf
             final ByteBufAllocator allocator = config.getAllocator();
+            // 用于管理读取缓冲区的对象，定义了缓冲区的大小、数据读取次数及其动态调整
             final RecvByteBufAllocator.Handle allocHandle = recvBufAllocHandle();
+            // 在读取开始前重置读取状态，以便计算数据读取情况
             allocHandle.reset(config);
 
             ByteBuf byteBuf = null;
             boolean close = false;
             try {
                 do {
+                    // 通过缓冲区分配器生成一个新的ByteBuf
                     byteBuf = allocHandle.allocate(allocator);
+                    // 从底层Channel中读取数据，并将数据写入ByteBuf
+                    // 更新lastBytesRead以记录读取的字节数，便于allocHandle控制读取的逻辑，例如判断是否继续读取或调整读取缓冲区大小等
                     allocHandle.lastBytesRead(doReadBytes(byteBuf));
+                    // 若小于等于0，表示没有数据可读
                     if (allocHandle.lastBytesRead() <= 0) {
                         // nothing was read. release the buffer.
                         byteBuf.release();
@@ -156,24 +165,32 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                         close = allocHandle.lastBytesRead() < 0;
                         if (close) {
                             // There is nothing left to read as we received an EOF.
-                            readPending = false;
+                            // 字节数为-1，表示对端关闭连接，收到EOF（文件结束符）
+                            readPending = false; // 表示读取过程结束，并且关闭连接或释放资源不需要再进行新的读取操作
                         }
                         break;
                     }
 
                     allocHandle.incMessagesRead(1);
+                    // 确保下次读取操作前不会重复触发相同的读取请求，避免资源浪费
                     readPending = false;
+                    // 将数据传递给ChannelPipeline，让处理器处理该数据
                     pipeline.fireChannelRead(byteBuf);
                     byteBuf = null;
+                    // 通过allocHandle判断是否继续读取
                 } while (allocHandle.continueReading());
 
+                // 标记读取操作完成
                 allocHandle.readComplete();
+                // 向管道发送读取操作完成事件
                 pipeline.fireChannelReadComplete();
 
                 if (close) {
+                    // 执行关闭操作，会触发相应的事件（channelInactive、channelUnregistered）
                     closeOnRead(pipeline);
                 }
             } catch (Throwable t) {
+                // 处理异常，包括释放资源和关闭连接等（会触发channelReadComplete和exceptionCaught事件，如果缓冲区有数据，还会触发读事件）
                 handleReadException(pipeline, byteBuf, t, close, allocHandle);
             } finally {
                 // Check if there is a readPending which was not processed yet.
@@ -183,6 +200,7 @@ public abstract class AbstractNioByteChannel extends AbstractNioChannel {
                 //
                 // See https://github.com/netty/netty/issues/2254
                 if (!readPending && !config.isAutoRead()) {
+                    // 移除对READ事件的关注，避免事件循环重复触发read()方法
                     removeReadOp();
                 }
             }
